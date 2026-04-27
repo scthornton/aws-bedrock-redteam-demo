@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    image: aws-bedrock-redteam-demo:latest
+    container_name: aws-bedrock-redteam-demo
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
