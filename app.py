@@ -26,6 +26,7 @@ import uuid
 
 from flask import Flask, Response, jsonify, request
 
+import airs_runtime
 from bedrock_client import BedrockError, converse, health_check
 from vulnerabilities import build_system_prompt, vulnerability_categories
 
@@ -121,7 +122,10 @@ def healthz():
             "app": APP_NAME,
             "bedrock_model": BEDROCK_MODEL_ID,
             "bedrock_reachable": bedrock_ok,
-            "runtime_security_enabled": False,
+            "runtime_security_enabled": airs_runtime.is_enabled(),
+            "airs_profile": os.environ.get("AIRS_PROFILE", "chatbot")
+            if airs_runtime.is_enabled()
+            else None,
             "vulnerabilities": vulnerability_categories(),
         }
     )
@@ -185,10 +189,42 @@ def chat_completions():
     requested_model = body.get("model") or BEDROCK_MODEL_ID
     max_tokens = int(body.get("max_tokens", 1024) or 1024)
     temperature = float(body.get("temperature", 0.7) or 0.7)
+    app_user = body.get("user") or "anonymous"
+    tr_id = uuid.uuid4().hex
 
-    log.info("chat req model=%s user_chars=%d history_turns=%d",
-             requested_model, len(user_text), len(history))
+    log.info("chat req tr=%s model=%s user_chars=%d history_turns=%d airs=%s",
+             tr_id, requested_model, len(user_text), len(history), airs_runtime.is_enabled())
 
+    # ---------- Pre-call AIRS scan (prompt only) ----------
+    if airs_runtime.is_enabled():
+        pre = airs_runtime.scan(
+            prompt=user_text,
+            ai_model=BEDROCK_MODEL_ID,
+            app_user=app_user,
+            tr_id=tr_id,
+        )
+        if pre.get("action") == "block":
+            threats = airs_runtime.detected_threats(pre, side="prompt")
+            log.info(
+                "airs PRE block tr=%s threats=%s report=%s",
+                tr_id, threats, pre.get("report_id"),
+            )
+            return Response(
+                json.dumps(
+                    _to_openai_response(
+                        text=airs_runtime.block_message(pre, side="prompt"),
+                        model=requested_model,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        finish_reason="content_filter",
+                    )
+                ),
+                status=BLOCK_STATUS_CODE,
+                mimetype="application/json",
+            )
+        log.info("airs PRE allow tr=%s latency=%sms", tr_id, pre.get("_latency_ms"))
+
+    # ---------- Bedrock call ----------
     try:
         result = converse(
             user_message=user_text,
@@ -206,13 +242,48 @@ def chat_completions():
             status=502,
         )
 
+    response_text = result["text"]
+    finish_reason = _bedrock_finish_reason(result["stop_reason"])
+
+    # ---------- Post-call AIRS scan (prompt + response) ----------
+    if airs_runtime.is_enabled():
+        post = airs_runtime.scan(
+            prompt=user_text,
+            response=response_text,
+            ai_model=BEDROCK_MODEL_ID,
+            app_user=app_user,
+            tr_id=tr_id,
+        )
+        if post.get("action") == "block":
+            threats = airs_runtime.detected_threats(post, side="response")
+            log.info(
+                "airs POST block tr=%s threats=%s report=%s",
+                tr_id, threats, post.get("report_id"),
+            )
+            response_text = airs_runtime.block_message(post, side="response")
+            finish_reason = "content_filter"
+            return Response(
+                json.dumps(
+                    _to_openai_response(
+                        text=response_text,
+                        model=requested_model,
+                        prompt_tokens=result["input_tokens"],
+                        completion_tokens=0,
+                        finish_reason=finish_reason,
+                    )
+                ),
+                status=BLOCK_STATUS_CODE,
+                mimetype="application/json",
+            )
+        log.info("airs POST allow tr=%s latency=%sms", tr_id, post.get("_latency_ms"))
+
     return jsonify(
         _to_openai_response(
-            text=result["text"],
+            text=response_text,
             model=requested_model,
             prompt_tokens=result["input_tokens"],
             completion_tokens=result["output_tokens"],
-            finish_reason=_bedrock_finish_reason(result["stop_reason"]),
+            finish_reason=finish_reason,
         )
     )
 
