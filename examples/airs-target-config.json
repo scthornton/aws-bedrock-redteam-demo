@@ -1,0 +1,14 @@
+{
+  "_comment": "Reference config for adding this demo as an AIRS Red Teaming target. Use the OpenAI connector type. Replace <EC2-PUBLIC-IP-OR-DOMAIN> and <DEMO_API_KEY> with the values from your deployment. AIRS Red Teaming UI: SCM > AI Security > AI Red Teaming > Targets > Add Target.",
+  "name": "aws-bedrock-redteam-demo",
+  "description": "Intentionally vulnerable Bedrock-backed demo target for Red Teaming scans (with optional AIRS Runtime overlay).",
+  "connector_type": "OpenAI",
+  "endpoint": "http://<EC2-PUBLIC-IP-OR-DOMAIN>:8080/v1/chat/completions",
+  "api_key": "<DEMO_API_KEY>",
+  "model": "sbassist",
+  "_notes": [
+    "The 'model' field can be any string; the demo accepts whatever the client sends and routes to the configured Bedrock model.",
+    "If you front the demo with an ALB / TLS, change the endpoint scheme to https:// and the port appropriately.",
+    "For the before/after demo, set ENABLE_RUNTIME_SECURITY=false on the EC2 instance for Phase 1, then flip it to true and re-run the same scan against the same target."
+  ]
+}
