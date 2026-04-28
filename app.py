@@ -79,12 +79,22 @@ def _error_response(code: str, message: str, status: int = 400) -> Response:
 
 def _to_openai_response(text: str, *, model: str, prompt_tokens: int, completion_tokens: int,
                        finish_reason: str = "stop") -> dict:
-    """Wrap a Bedrock reply in OpenAI ChatCompletion shape."""
+    """
+    Wrap a Bedrock reply in OpenAI ChatCompletion shape.
+
+    Also exposes the assistant text under a top-level `output` field. The
+    AIRS Red Teaming REST connector's response template uses a flat
+    `{"output": "{RESPONSE}"}` shape - it does not appear to traverse
+    nested objects to extract the AI text. Adding `output` at the top
+    level keeps the canonical OpenAI shape intact (clients ignore extra
+    fields) while letting the AIRS template extract cleanly.
+    """
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
+        "output": text,
         "choices": [
             {
                 "index": 0,
