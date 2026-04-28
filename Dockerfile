@@ -21,4 +21,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null || exit 1
 
-CMD exec gunicorn --bind ":${PORT}" --workers 1 --threads 4 --timeout 120 --access-logfile - app:app
+CMD exec gunicorn --bind ":${PORT}" --workers 4 --threads 4 --timeout 120 --access-logfile - app:app
