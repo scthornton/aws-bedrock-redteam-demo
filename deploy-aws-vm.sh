@@ -43,8 +43,10 @@ red()   { printf "\033[31m%s\033[0m\n" "$*"; }
 green() { printf "\033[32m%s\033[0m\n" "$*"; }
 blue()  { printf "\033[34m%s\033[0m\n" "$*"; }
 
-log() { printf "\033[36m[deploy]\033[0m %s\n" "$*"; }
-die() { red "ERROR: $*"; exit 1; }
+# Log messages go to stderr so they don't end up captured by $(...) calls
+# that read the stdout of helper functions.
+log() { printf "\033[36m[deploy]\033[0m %s\n" "$*" >&2; }
+die() { red "ERROR: $*" >&2; exit 1; }
 
 aws_cmd() { aws --region "${AWS_REGION}" "$@"; }
 
@@ -146,6 +148,20 @@ deploy() {
     sg_id=$(ensure_security_group)
 
     log "Launching ${INSTANCE_TYPE} in ${AWS_REGION}"
+    local userdata_file
+    userdata_file=$(mktemp -t airs-demo-userdata.XXXXXX)
+    cat > "${userdata_file}" <<'USERDATA'
+#!/bin/bash
+set -e
+dnf -y install docker
+systemctl enable --now docker
+usermod -aG docker ec2-user
+mkdir -p /usr/libexec/docker/cli-plugins
+curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+    -o /usr/libexec/docker/cli-plugins/docker-compose
+chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+USERDATA
+
     local instance_id
     instance_id=$(aws_cmd ec2 run-instances \
         --image-id "${AMI_ID}" \
@@ -155,20 +171,9 @@ deploy() {
         --tag-specifications \
             "ResourceType=instance,Tags=[{Key=Name,Value=${PROJECT_TAG}},{Key=Project,Value=${PROJECT_TAG}}]" \
         --metadata-options "HttpTokens=required,HttpPutResponseHopLimit=2" \
-        --user-data "$(cat <<'USERDATA'
-#!/bin/bash
-set -e
-dnf -y install docker
-systemctl enable --now docker
-usermod -aG docker ec2-user
-# install docker-compose v2 plugin
-mkdir -p /usr/libexec/docker/cli-plugins
-curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
-    -o /usr/libexec/docker/cli-plugins/docker-compose
-chmod +x /usr/libexec/docker/cli-plugins/docker-compose
-USERDATA
-)" \
+        --user-data "file://${userdata_file}" \
         --query "Instances[0].InstanceId" --output text)
+    rm -f "${userdata_file}"
     log "Instance ${instance_id} launching"
 
     log "Waiting for instance to reach 'running' state..."
