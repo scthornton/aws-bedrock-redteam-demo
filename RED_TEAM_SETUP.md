@@ -15,13 +15,22 @@ The OpenAI connector in AIRS Red Teaming is locked to `api.openai.com` - the cus
 
 Use the **REST** connector instead. AIRS substitutes `{INPUT}` for each attack prompt and reads the model's reply from a JSONPath you specify. Multi-turn works too.
 
-## Add the target
+## Endpoint choice
+
+The app exposes two endpoints that both call the same Bedrock backend with the same vulnerable system prompt. Pick whichever one matches the response-extraction style your AIRS UI exposes:
+
+- **`/v1/chat/completions`** - canonical OpenAI shape. Configure AIRS with a JSONPath-style `Response path` of `choices[0].message.content`. This is the path the AIRS docs call out by name for OpenAI-compatible APIs ([howto-configure-red-team-target](https://docs.paloaltonetworks.com/), Phase 6 and 7).
+- **`/api/chat`** - flat single-key shape `{"output": "<text>"}`. Configure AIRS with a `Response path` of `output` (or, if your UI uses a `{RESPONSE}` template field instead of JSONPath, set the template to `{"output":"{RESPONSE}"}`). This matches the proven DVLA flat-shape pattern that other customers run successfully.
+
+If one fails to grade attacks, switch to the other. They are functionally identical underneath.
+
+## Add the target (Option A: OpenAI-shape - recommended)
 
 In SCM: **AI Security -> AI Red Teaming -> Targets -> Add Target**.
 
 | Field | Value |
 | --- | --- |
-| Name | `aws-bedrock-redteam-demo` (or anything) |
+| Name | `aws-bedrock-redteam-demo` |
 | Target Type | APPLICATION |
 | Connection Type | **REST** |
 | Endpoint Type | PUBLIC |
@@ -33,6 +42,27 @@ In SCM: **AI Security -> AI Red Teaming -> Targets -> Add Target**.
 | Body template | `{"model":"sb","messages":[{"role":"user","content":"{INPUT}"}]}` |
 | Response path | `choices[0].message.content` |
 | Probe message | (default is fine) |
+
+## Add the target (Option B: flat shape - DVLA-style fallback)
+
+Use this if Option A's UI does not expose a JSONPath response field, or if validation passes but the scan still grades 0% with "Empty output" / "Response key not found" errors.
+
+| Field | Value |
+| --- | --- |
+| Name | `aws-bedrock-redteam-demo-flat` |
+| Target Type | APPLICATION |
+| Connection Type | **REST** |
+| Endpoint Type | PUBLIC |
+| URL | `http://<EC2-IP>:8080/api/chat` |
+| HTTP Method | POST |
+| Request timeout | 110 (default) |
+| Auth Type | HEADERS |
+| Headers | `Authorization: Bearer <DEMO_API_KEY>` and `Content-Type: application/json` |
+| Body template | `{"messages":[{"role":"user","content":"{INPUT}"}]}` |
+| Response path | `output` |
+| Probe message | (default is fine) |
+
+The `/api/chat` endpoint also accepts `{"input":"{INPUT}"}` as a body template if your AIRS instance uses that pattern.
 
 To copy `DEMO_API_KEY` to your clipboard without echoing it to your terminal:
 

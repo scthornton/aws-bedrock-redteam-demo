@@ -80,21 +80,16 @@ def _error_response(code: str, message: str, status: int = 400) -> Response:
 def _to_openai_response(text: str, *, model: str, prompt_tokens: int, completion_tokens: int,
                        finish_reason: str = "stop") -> dict:
     """
-    Wrap a Bedrock reply in OpenAI ChatCompletion shape.
-
-    Also exposes the assistant text under a top-level `output` field. The
-    AIRS Red Teaming REST connector's response template uses a flat
-    `{"output": "{RESPONSE}"}` shape - it does not appear to traverse
-    nested objects to extract the AI text. Adding `output` at the top
-    level keeps the canonical OpenAI shape intact (clients ignore extra
-    fields) while letting the AIRS template extract cleanly.
+    Canonical OpenAI ChatCompletion shape. AIRS Red Teaming's REST connector
+    extracts the assistant text via the response_path `choices[0].message.content`
+    (per the AIRS docs). Keep this shape pristine - extra top-level keys can
+    confuse AIRS's structural parser and produce "Empty output" errors.
     """
     return {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
-        "output": text,
         "choices": [
             {
                 "index": 0,
@@ -301,25 +296,20 @@ def chat_completions():
 @app.post("/api/chat")
 def airs_flat_chat():
     """
-    Dedicated AIRS Red Teaming endpoint that returns the flat response shape
-    AIRS's REST connector template `{"output":"{RESPONSE}"}` reliably extracts.
+    Flat-shape AIRS Red Teaming endpoint. Use this when configuring the AIRS
+    REST connector with a JSONPath response_path of `output` (single top-level
+    key), matching the proven DVLA flat-shape pattern.
 
-    Why this exists: the OpenAI `/v1/chat/completions` route returns nested
-    JSON (`choices[0].message.content`) plus extra fields like `id`, `model`,
-    `usage`. The AIRS REST connector's template-based extraction has trouble
-    with deeply-nested response shapes, even when the template mirrors them.
-    This route bypasses all that ambiguity by returning ONLY `{"output": ...}`,
-    matching the pattern of every reliably-working AIRS public-vulnerable demo.
-
-    Accepts the same body shapes AIRS might be configured to send:
-      - {"messages":[{"role":"user","content":"..."}]}  (OpenAI-shape, our default body template)
+    Accepts both body shapes AIRS might be configured to send:
+      - {"messages":[{"role":"user","content":"..."}]}  (OpenAI-shape body template)
       - {"input": "..."}                                (DVLA-shape, plain prompt)
 
-    Returns exactly:
-      {"output": "<assistant text or block message>"}
+    Returns exactly: {"output": "<assistant text or block message>"} - one key,
+    no others. The single-key response is what AIRS reliably extracts via
+    response_path = `output`.
 
-    Auth (DEMO_API_KEY) and the AIRS Runtime overlay are wired in the same
-    way as /v1/chat/completions; the only difference is the I/O shape.
+    Auth (DEMO_API_KEY) and the AIRS Runtime overlay are wired the same way as
+    /v1/chat/completions; the only difference is the I/O shape.
     """
     ok, err = _check_auth()
     if not ok:
@@ -400,8 +390,8 @@ def airs_flat_chat():
                 status=BLOCK_STATUS_CODE, mimetype="application/json",
             )
 
-    return Response(json.dumps({"output": response_text}), status=200,
-                    mimetype="application/json")
+    return Response(json.dumps({"output": response_text}),
+                    status=200, mimetype="application/json")
 
 
 if __name__ == "__main__":
