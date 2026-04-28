@@ -1,199 +1,117 @@
-# Configuring the AIRS Red Teaming Target
+# AIRS Red Teaming Target Setup
 
-Once the demo is reachable on a public URL (locally or on EC2), this is how to wire it up as a Red Teaming target in Strata Cloud Manager. The recommended path uses the **AIRS native AWS Bedrock connection method** - AIRS calls Bedrock directly with our vulnerable system prompt, no Flask app or REST parsing in the loop. The Flask app stays in the picture only for Phase 2 (Runtime overlay before/after demo).
+This is the 5-minute customer path. It assumes you already deployed the demo to EC2 (see [AWS_DEPLOYMENT.md](AWS_DEPLOYMENT.md)) and have a Prisma AIRS tenant with Red Teaming enabled.
 
-Two configuration options are documented below:
+## Before you start
 
-| Option | Use when | Connection Method | Notes |
-| --- | --- | --- | --- |
-| **A. AWS Bedrock (recommended)** | Phase 1 baseline scan on a Bedrock-backed target | AWS Bedrock | Cleanest path. AIRS hits Bedrock directly with our system prompt loaded. No REST parsing surface area. |
-| **B. REST against the Flask app** | Phase 2 (Runtime overlay ON) or any target where Bedrock native is unavailable | REST | Required for the before / after Runtime demo, since the AIRS Runtime overlay lives inside the Flask app. |
+You need:
 
-## Prerequisites (both options)
+- Demo URL with public IP (e.g. `http://<EC2-IP>:8080`) - from `./deploy-aws-vm.sh`
+- `DEMO_API_KEY` from `.env` - the bearer token AIRS will use to auth to the demo
+- SCM admin or AI Security admin role on a Prisma AIRS tenant with Red Teaming enabled
 
-- A Prisma AIRS tenant with Red Teaming enabled
-- SCM admin or AI Security admin role
-- Bedrock model access approved on the AWS account for the auth mode you'll use (see Option A's "AWS account approval" step below if using sigv4)
-
----
-
-## Option A: AWS Bedrock connection method (recommended)
-
-### A.1 - One-time AWS account approval for sigv4 access
-
-AIRS's Bedrock connector authenticates with **IAM access key + secret (sigv4)**. AWS Bedrock gates sigv4 access to Anthropic models behind a use-case form that is **separate from the bearer-token approval** the Flask app uses. If you only ever ran the Flask app's bearer-token path, sigv4 access on this account is probably still pending.
-
-To check / request approval:
-
-1. AWS console -> Bedrock -> **Model access** (left nav).
-2. Find the Claude model you intend to use (e.g. `Claude Sonnet 4.5 (cross-region inference)`).
-3. If status is not "Access granted", click **Manage model access** -> **Request model access**.
-4. Fill out the Anthropic use-case form (industry, use case, employee count, intended use) and submit.
-5. Wait ~15 minutes. Re-check via `./scripts/test-bedrock-creds.sh` (uses bearer token) and `aws bedrock-runtime converse ...` (sigv4) until both succeed.
-
-If Bedrock console shows a "Model use case details have not been submitted" banner when you try to invoke a Claude model with sigv4, the form has not been completed for this auth path on this account. Bearer-token access alone is not enough.
-
-### A.2 - Provision a scoped IAM user for AIRS
-
-Run the provided helper. It creates an IAM user with the minimum policy AIRS needs (Bedrock invoke + list on Anthropic Claude models only) and prints a one-time access key / secret to paste into the AIRS UI.
+Copy the API key to your clipboard now (does not echo to terminal):
 
 ```bash
-./scripts/provision-airs-bedrock-iam.sh
+grep ^DEMO_API_KEY .env | cut -d= -f2 | tr -d '\n' | pbcopy
 ```
 
-The output looks like:
+## Step 1 - verify the endpoint is live
 
-```
-Region:           us-east-1
-IAM Access ID:    AKIA...
-IAM Access Secret:...
-Model Name:       us.anthropic.claude-sonnet-4-5-20250929-v1:0
-```
-
-When the demo is over, revoke with:
+Run this from your laptop. Substitute your EC2 IP and paste the API key inline (do **not** use `${DEMO_API_KEY}` shell expansion - that has a known gotcha that fails silently with empty token):
 
 ```bash
-./scripts/provision-airs-bedrock-iam.sh --destroy
+curl -X POST 'http://<EC2-IP>:8080/api/chat' \
+  -H 'Authorization: Bearer <PASTE-DEMO-API-KEY-HERE>' \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"reply with one word: pong"}]}'
 ```
 
-### A.3 - Add the target in SCM
+Expected: `{"output": "pong"}` in 2-5 seconds. If you get a timeout or 401, fix that before touching AIRS - see Troubleshooting below.
 
-In SCM: **AI Security -> AI Red Teaming -> Targets -> Add Target**.
+## Step 2 - import target into AIRS
+
+In SCM: **AI Security → AI Red Teaming → Targets → Add Target**
 
 | Field | Value |
 | --- | --- |
-| Name | `aws-bedrock-redteam-demo` |
-| Target Type | APPLICATION |
-| Connection Method | **AWS Bedrock** |
-| Endpoint Type | PUBLIC |
-| Region | `us-east-1` |
-| IAM Access ID | (from `provision-airs-bedrock-iam.sh` output) |
-| IAM Access Secret | (from `provision-airs-bedrock-iam.sh` output) |
-| Session Token | (leave blank - long-term access key) |
-| Model Name | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` |
-| Model Streaming | off |
+| Target Name | `bedrock-demo` (anything) |
+| Target Type | **Application** |
+| Connection Method | **REST API** |
+| Endpoint Accessibility | **Public** |
+| Choose Method | **cURL Import** |
 
-### A.4 - Paste the vulnerable system prompt
-
-In the **Additional Context** section of the target form:
-
-| Field | Value |
-| --- | --- |
-| System Prompt | (output of `./scripts/print-system-prompt.sh`) |
-| Base Model | `Anthropic Claude Sonnet 4.5` |
-| Core Architecture | Single-LLM with system-prompt-embedded RAG context |
-| Languages Supported | English |
-| Banned Keywords | (leave blank) |
-| Tools Accessible | (leave blank) |
-
-Copy the system prompt to your clipboard (does not echo to terminal):
+In the **cURL String** box, paste this (substitute your EC2 IP and the actual API key):
 
 ```bash
-./scripts/print-system-prompt.sh | pbcopy
+curl 'http://<EC2-IP>:8080/api/chat' \
+  -H 'Authorization: Bearer <PASTE-DEMO-API-KEY-HERE>' \
+  -H 'Content-Type: application/json' \
+  --data '{"messages":[{"role":"user","content":"{INPUT}"}]}'
 ```
 
-The system prompt is what makes this demo a vulnerable target. It contains the synthetic FAKE_DATABASE, weak role boundaries, and the pre-seeded "verified user" loophole that the AIRS Attack Library exploits. Without it, AIRS hits raw Claude and the scan grades as "model alignment is decent" - which is a much weaker demo. With it, expect 50 to 100+ findings on the Attack Library.
+Click **Import**. AIRS auto-fills the API endpoint, headers, and Request JSON.
 
-### A.5 - Target Background
+## Step 3 - set the Response JSON template (the one field that matters)
+
+After import, scroll to the **Response JSON** section. AIRS may have auto-filled this with a guess. **Replace whatever is there with exactly:**
+
+```json
+{"output":"{RESPONSE}"}
+```
+
+This is the most important single field in the whole target config. AIRS uses this template to extract the AI text from the response. Our `/api/chat` endpoint returns `{"output":"<text>"}`, so this template tells AIRS the model's reply lives at the `output` key.
+
+## Step 4 - target background
+
+Fill in (or paste from the helper):
 
 | Field | Value |
 | --- | --- |
 | Industry | Banking / Financial Services |
-| Use Case | Internal customer service representative copilot. Authenticated employees query the assistant for caller account information, transaction history, and account-action eligibility during live support calls. |
-| Competitors | (leave blank) |
+| Use Case | Internal CSR copilot. Authenticated employees query the assistant for caller account information, transaction history, and account-action eligibility during live support calls. |
+| System Prompt | output of `./scripts/print-system-prompt.sh` (`pbcopy` to clipboard) |
 
-### A.6 - Multi-turn
+`./scripts/print-system-prompt.sh | pbcopy` then paste into the System Prompt field.
 
-Multi-turn isn't directly applicable to native Bedrock targets (AIRS handles the messages array itself). Leave at default. Multi-turn SECURITY rules will run normally because AIRS owns the conversation state.
+The system prompt is what makes this demo a vulnerable target. It contains the synthetic FAKE_DATABASE, weak role boundaries, and the pre-seeded "verified user" loophole the AIRS Attack Library exploits. Without it, AIRS hits raw Claude and the scan grades as "model alignment is decent" - a much weaker demo. With it, expect 50-100+ findings on the Attack Library.
 
-### A.7 - Validate, then scan
-
-1. Click **Test Connection** / **Validate**. Should be green within seconds.
-2. Save the target.
-3. From the target detail page, click **Run Scan** -> **Attack Library**.
-4. For the first run, pick a single category (Sensitive Data Exposure or Prompt Injection) and 10-20 attacks. Verify the response capture is non-empty before committing scan time to the full library.
-5. Once the small scan looks right, run the full Attack Library for headline numbers.
-
----
-
-## Option B: REST connector against the Flask app
-
-Use this when:
-
-- Phase 2 of the demo (Runtime overlay ON) - the Flask app sits between AIRS and Bedrock and runs the Runtime scan pre/post.
-- AWS account does not yet have sigv4 access for Bedrock (and you can't wait for the form approval).
-- Customer environment does not allow direct AIRS -> Bedrock egress.
-
-The app exposes two endpoints. Pick whichever matches the response-extraction style your AIRS UI exposes.
-
-### B.1 - URL choice
-
-- **`/v1/chat/completions`** - canonical OpenAI shape. Configure with `Response path` = `choices[0].message.content`. Matches the AIRS docs verbatim.
-- **`/api/chat`** - flat single-key shape `{"output":"<text>"}`. Configure with `Response path` = `output`. Matches the proven DVLA flat-shape pattern customers already run successfully.
-
-If one fails to grade attacks after a fresh import, switch to the other. They call the same Bedrock backend.
-
-### B.2 - Add the target (OpenAI-shape)
+## Step 5 - multi-turn
 
 | Field | Value |
 | --- | --- |
-| Name | `aws-bedrock-redteam-demo-rest` |
-| Target Type | APPLICATION |
-| Connection Method | **REST** |
-| Endpoint Type | PUBLIC |
-| URL | `http://<EC2-IP>:8080/v1/chat/completions` |
-| HTTP Method | POST |
-| Request timeout | 110 (default) |
-| Auth Type | HEADERS |
-| Headers | `Authorization: Bearer <DEMO_API_KEY>` and `Content-Type: application/json` |
-| Body template | `{"model":"sb","messages":[{"role":"user","content":"{INPUT}"}]}` |
-| Response path | `choices[0].message.content` |
+| Multi-Turn / Supports Sessions | **No** (stateless mode) |
+| Assistant role (if asked) | `assistant` |
 
-### B.3 - Add the target (flat shape, DVLA fallback)
+Skip multi-turn entirely if your UI doesn't expose it. The only attacks you lose are the multi-turn rules in the SECURITY category - everything else runs.
 
-| Field | Value |
-| --- | --- |
-| URL | `http://<EC2-IP>:8080/api/chat` |
-| Body template | `{"messages":[{"role":"user","content":"{INPUT}"}]}` |
-| Response path | `output` |
+## Step 6 - validate
 
-The `/api/chat` endpoint also accepts `{"input":"{INPUT}"}` as a body template if your AIRS instance uses that pattern. Auth headers are identical.
+Click **Test Connection** / **Validate**. Expected: green within ~3 seconds.
 
-To copy the DEMO_API_KEY to clipboard:
+If validation **ReadTimeouts**, you have a previous scan still running and saturating the target's worker pool. Cancel any in-progress scans first, then validate again. The container handles 16 concurrent requests; once nothing is hammering it, validation completes instantly.
+
+## Step 7 - small test scan first
+
+**Don't** kick off the full Attack Library on the first run. Do this instead:
+
+1. **Run Scan → Attack Library**
+2. Select **PROMPT_INJECTION** category only
+3. Limit to **10-20 attacks**
+4. **Start**
+
+Expected: progress advances past 0% within 30 seconds; per-attack rows show non-empty Response captures with real Claude text. ASR will be high - that's the point of this demo.
+
+## Step 8 - full library
+
+If the small scan grades cleanly, run the full Attack Library against the same target. 30 minutes to a few hours. Treat as a background job.
+
+## Step 9 - Phase 2 (Runtime ON / Before-After)
+
+Flip the AIRS Runtime overlay on the EC2 instance:
 
 ```bash
-grep ^DEMO_API_KEY .env | cut -d= -f2 | pbcopy
-```
-
-### B.4 - Multi-turn (REST only)
-
-Enable it. The app is OpenAI-shaped (full `messages[]` history sent on every request, no server-side session IDs), so use **stateless**:
-
-| Field | Value |
-| --- | --- |
-| Multi-turn | Enabled |
-| Mode | `stateless` |
-| Assistant role | `assistant` |
-
-Skip multi-turn entirely and you only lose the multi-turn techniques inside the SECURITY attack category.
-
-### B.5 - System prompt and target background
-
-The Flask app already injects the vulnerable system prompt at request time via `vulnerabilities.build_system_prompt()` - you do **not** need to paste it into the AIRS UI for the REST target. Still fill in the Target Background (industry, use case) so AIRS tailors the attack library appropriately. Use the same values as Option A's section A.5.
-
----
-
-## Phase 1 -> Phase 2 flip (Runtime overlay before/after)
-
-The repo's headline demo is a before/after comparison: scan once with AIRS Runtime OFF, scan again with it ON, show the finding-count delta.
-
-- **Phase 1 (Runtime OFF)**: use Option A (Bedrock native). Cleanest baseline. The system prompt's seeded vulnerabilities surface as a long list of findings.
-- **Phase 2 (Runtime ON)**: switch to Option B (REST against the Flask app) and toggle `ENABLE_RUNTIME_SECURITY=true` on the EC2 instance. AIRS Runtime scans pre/post inside the app and blocks unsafe content. Re-run the scan; finding count drops dramatically.
-
-Toggle the env var via SSM:
-
-```bash
-aws ssm send-command --instance-ids i-0a19f6d22c501959a \
+aws ssm send-command --instance-ids <INSTANCE-ID> \
     --document-name AWS-RunShellScript --region us-east-1 \
     --parameters 'commands=[
         "sudo sed -i \"s/^ENABLE_RUNTIME_SECURITY=.*/ENABLE_RUNTIME_SECURITY=true/\" /opt/airs-demo/.env",
@@ -201,32 +119,53 @@ aws ssm send-command --instance-ids i-0a19f6d22c501959a \
     ]'
 ```
 
-Phase 1 and Phase 2 use different target configs in AIRS, but the scan reports are directly comparable - same Attack Library, same model (Claude Sonnet 4.5), same vulnerable system prompt.
+Re-scan against the **same target** with the **same scan config**. Finding count drops dramatically. That delta is the customer demo.
 
 ---
 
 ## Troubleshooting
 
-**Validate fails with "Connection refused" or "Connection timeout" (Option B only)**
-The Flask app isn't reachable from AIRS's source IPs. Confirm:
-- Security group allows inbound on port 8080 from `0.0.0.0/0` (or AIRS source IPs at minimum)
-- Container is up: `./deploy-aws-vm.sh --status`
-- `curl http://<EC2-IP>:8080/healthz` returns `status: ok` from outside the box
+The failure modes below were all hit during initial deployment and are now closed at the app layer. They should not recur, but if they do:
 
-**Validate passes but probe responses look empty (Option B)**
-Most likely the response path is wrong. The AIRS docs are explicit: for OpenAI-compatible APIs the path is `choices[0].message.content`; for the flat `/api/chat` shape it is `output`. Tail logs (`./scripts/tail-ec2-logs.sh`) and watch the request as you click Validate. If the UI shows a `{RESPONSE}` template field rather than a JSONPath, set the template to `{"choices":[{"message":{"content":"{RESPONSE}"}}]}` (OpenAI) or `{"output":"{RESPONSE}"}` (flat).
+| Symptom in AIRS UI | Real cause | Fix |
+| --- | --- | --- |
+| `Response key 'content' not found in response` | Response JSON template field is `{"content":"{RESPONSE}"}` (default cURL-import auto-fill) and the `/api/chat` endpoint returns `output`, not `content` | Set Response JSON to `{"output":"{RESPONSE}"}` exactly |
+| `Empty output received from target` | Bedrock returned empty text for a guardrail-filtered prompt | Already fixed in app.py - empty model output now returns `[empty model response]` sentinel string. If you see this on a fresh deploy, your container is older than commit `ceb512e` |
+| `Target endpoint connection failed or returned an unknown error while generating output` | App returned non-2xx (e.g. 502 on BedrockError) | Already fixed in app.py - all errors return HTTP 200 with sentinel output. If you see this, your container is older than commit `ceb512e` |
+| `Target functionality test failed: ReadTimeout` during Validate | gunicorn workers all busy with an in-progress scan; validation queues and times out | Cancel running scans, retry validation. Container ships with 4 workers × 4 threads = 16 concurrent slots, which is sized for AIRS scan rate |
+| `Invalid API key` (401) on test cURL from your laptop | Shell expanded `${DEMO_API_KEY}` from the parent shell (empty) before the inline `DEMO_API_KEY=...` assignment took effect | Either `export DEMO_API_KEY=...` first, or paste the literal key into the curl command |
+| `Connection refused` / `Connection timeout` | EC2 not reachable from AIRS source IPs | Confirm SG allows inbound 8080 from `0.0.0.0/0` (or AIRS source IP `104.198.97.107`); confirm container is up via `./deploy-aws-vm.sh --status` |
+| Findings count unexpectedly low | Runtime overlay accidentally left ON during Phase 1 | Set `ENABLE_RUNTIME_SECURITY=false`, restart container |
+| Scan reports lots of "API errors" rather than attack outcomes | Some path in app.py returns non-2xx | Should not happen on current code; if it does, tail container logs and look for the offending request |
 
-**"Model use case details have not been submitted" when validating Option A**
-The AWS account has not approved sigv4 access for the chosen Anthropic model. Bearer-token approval (which the Flask app uses) is separate. Submit the use-case form via Bedrock console -> Model access, wait 15 minutes, retry. See section A.1.
+### How to read the logs while a scan is running
 
-**Single attack failures during a scan**
-AIRS's default request timeout is 110 seconds. Long input prompts (some attacks are 2000+ chars) can exceed that on a single-worker container. AIRS marks the attack failed and moves on; the scan continues. Failure rate >5%? Bump gunicorn worker count via SSM.
+```bash
+./scripts/tail-ec2-logs.sh
+```
 
-**"Target endpoint connection failed" mid-scan**
-Same root cause as above. Watch container logs for any `bedrock error` or `5xx` lines; if there are none, the scan is healthy and the UI message refers to a single attack.
+Healthy scan looks like:
 
-**Scan reports lots of "API errors" rather than attack outcomes**
-Check that `BLOCK_STATUS_CODE=200`. Non-2xx responses get classified as API errors instead of being scored as attack outcomes. This is intentional and must not be changed.
+```
+104.198.97.107 - - [DATE] "POST /api/chat HTTP/1.1" 200 1234 ...
+2026-04-28 13:00:09,478 INFO app | api/chat req tr=... user_chars=112 ...
+```
 
-**Findings count is unexpectedly low**
-You may have left `ENABLE_RUNTIME_SECURITY=true` on, in which case AIRS sees a refusal for every attack. Flip it to `false` for the Phase 1 baseline.
+Source IP `104.198.97.107` confirms AIRS is the caller. Status `200` and 4-digit-byte response body confirms real model content. If you see body sizes consistently below ~50 bytes or 4xx/5xx codes, drop into the troubleshooting matrix above.
+
+---
+
+## Appendix: AWS Bedrock native connector (alternative path)
+
+The flat-shape REST path above is the primary recommendation. If you want AIRS to call Bedrock directly (no Flask app in the loop), see the AWS Bedrock connector setup in [docs.paloaltonetworks.com](https://docs.paloaltonetworks.com/ai-runtime-security/ai-red-teaming/identify-ai-system-risks-with-ai-red-teaming/get-started-with-prisma-airs-ai-red-teaming/targets/add-a-target-aws-bedrock-cm). Trade-offs:
+
+- **Pros:** No Flask app, no REST parser surface area; AIRS does sigv4 directly.
+- **Cons:** Requires the Anthropic use-case form approval **for sigv4 access**, which is gated separately from bearer-token approval. Bearer-token approval (which the Flask app uses) is not enough. Form takes ~15 minutes to clear.
+- **System prompt:** Goes into the AIRS target's "Additional Context > System Prompt" field. Get it via `./scripts/print-system-prompt.sh | pbcopy`.
+- **IAM credentials:** Run `./scripts/provision-airs-bedrock-iam.sh` to create a scoped IAM user. It prints the access key, secret, and model ID for direct paste into the AIRS UI.
+
+For the Phase 2 (Runtime ON) demo, you must use the REST connector path above - the Runtime overlay lives in the Flask app. AWS Bedrock native bypasses the app entirely.
+
+## Appendix: OpenAI-shape `/v1/chat/completions` (legacy)
+
+The app also exposes `/v1/chat/completions` returning canonical OpenAI shape. Some AIRS UI variants accept JSONPath-style response paths (`choices[0].message.content`); some expect a structural template (`{"choices":[{"message":{"content":"{RESPONSE}"}}]}`). The flat `/api/chat` is simpler and proven, so prefer it. This route stays for legacy clients and OpenAI-compatible tooling.

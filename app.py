@@ -196,9 +196,13 @@ def chat_completions():
     temperature = float(body.get("temperature", 0.7) or 0.7)
     app_user = body.get("user") or "anonymous"
     tr_id = uuid.uuid4().hex
+    t_start = time.time()
 
-    log.info("chat req tr=%s model=%s user_chars=%d history_turns=%d airs=%s",
-             tr_id, requested_model, len(user_text), len(history), airs_runtime.is_enabled())
+    log.info(
+        "chat req tr=%s model=%s user_chars=%d history_turns=%d airs=%s prompt_head=%r",
+        tr_id, requested_model, len(user_text), len(history),
+        airs_runtime.is_enabled(), user_text[:120],
+    )
 
     # ---------- Pre-call AIRS scan (prompt only) ----------
     if airs_runtime.is_enabled():
@@ -254,8 +258,10 @@ def chat_completions():
         )
 
     response_text = result["text"]
+    sentinel_used = False
     if not response_text or not response_text.strip():
         response_text = "[empty model response]"
+        sentinel_used = True
     finish_reason = _bedrock_finish_reason(result["stop_reason"])
 
     # ---------- Post-call AIRS scan (prompt + response) ----------
@@ -290,6 +296,11 @@ def chat_completions():
             )
         log.info("airs POST allow tr=%s latency=%sms", tr_id, post.get("_latency_ms"))
 
+    elapsed_ms = int((time.time() - t_start) * 1000)
+    log.info(
+        "chat ok tr=%s response_chars=%d elapsed_ms=%d sentinel=%s response_head=%r",
+        tr_id, len(response_text), elapsed_ms, sentinel_used, response_text[:120],
+    )
     return jsonify(
         _to_openai_response(
             text=response_text,
@@ -353,9 +364,11 @@ def airs_flat_chat():
 
     app_user = body.get("user") or "anonymous"
     tr_id = uuid.uuid4().hex
+    t_start = time.time()
 
-    log.info("api/chat req tr=%s user_chars=%d history_turns=%d airs=%s",
-             tr_id, len(user_text), len(history), airs_runtime.is_enabled())
+    log.info("api/chat req tr=%s user_chars=%d history_turns=%d airs=%s prompt_head=%r",
+             tr_id, len(user_text), len(history), airs_runtime.is_enabled(),
+             user_text[:120])
 
     if airs_runtime.is_enabled():
         pre = airs_runtime.scan(prompt=user_text, ai_model=BEDROCK_MODEL_ID,
@@ -404,8 +417,16 @@ def airs_flat_chat():
     # zero-token completions; AIRS rejects empty strings with "Empty output
     # received from target". Substitute a non-empty sentinel so the attack
     # gets graded (typically as a refusal / defensive outcome).
+    sentinel_used = False
     if not response_text or not response_text.strip():
         response_text = "[empty model response]"
+        sentinel_used = True
+
+    elapsed_ms = int((time.time() - t_start) * 1000)
+    log.info(
+        "api/chat ok tr=%s response_chars=%d elapsed_ms=%d sentinel=%s response_head=%r",
+        tr_id, len(response_text), elapsed_ms, sentinel_used, response_text[:120],
+    )
 
     return Response(json.dumps({"output": response_text}),
                     status=200, mimetype="application/json")

@@ -14,3 +14,12 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    # Log rotation: keep 5 files of up to 50MB each (~250MB ceiling) so a long
+    # AIRS scan never fills the EC2 disk. Logs persist across container restarts
+    # via the json-file driver (default location /var/lib/docker/containers/...).
+    # Use ./scripts/fetch-logs.sh to pull them to your laptop for offline review.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

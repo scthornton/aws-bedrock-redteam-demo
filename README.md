@@ -226,8 +226,79 @@ Idempotent. Removes the instance, security group, IAM role and instance profile,
 | `scripts/test-local.sh` | Smoke test the running app (works locally or against EC2) |
 | `scripts/test-attack.sh` | Send 8 known-bad prompts, classify each as LEAK / BLOCK / SAFE |
 | `scripts/tail-ec2-logs.sh` | Live-tail container logs from EC2 via SSM (no SSH plugin needed) |
+| `scripts/fetch-logs.sh` | Pull recent / full container log history to your laptop for offline grep |
+| `scripts/print-system-prompt.sh` | Emit the vulnerable system prompt for paste-in to AIRS UI |
+| `scripts/provision-airs-bedrock-iam.sh` | Provision a scoped IAM user for AIRS native Bedrock connector |
 | `examples/airs-target-config.json` | Reference values for the AIRS REST target |
 | `examples/attack-prompts.csv` | Custom-prompt set for AIRS Attack Library import |
+
+## Logs and troubleshooting
+
+### How requests are logged
+
+Every chat request emits two structured lines on the container's stdout, keyed by a per-request `tr_id`:
+
+```
+2026-04-28 13:00:09 INFO app | api/chat req tr=fd068727... user_chars=110 history_turns=0 airs=False prompt_head='...'
+2026-04-28 13:00:11 INFO app | api/chat ok  tr=fd068727... response_chars=842 elapsed_ms=1843 sentinel=False response_head='...'
+```
+
+Plus the gunicorn access log line for the same request:
+
+```
+104.198.97.107 - - [28/Apr/2026:13:00:11 +0000] "POST /api/chat HTTP/1.1" 200 1116 "-" "python-httpx/0.28.1"
+```
+
+This lets you grep one trace end-to-end (`grep tr=fd068727 logs.txt`) and spot slow Bedrock calls (`elapsed_ms > 10000`), guardrail-empty responses (`sentinel=True`), and AIRS scanner traffic (source IP `104.198.97.107`, user-agent `python-httpx`).
+
+### Live tail while a scan is running
+
+```bash
+./scripts/tail-ec2-logs.sh
+```
+
+Polls every 4s via SSM, de-dupes lines. Ctrl-C to stop. No SSH or session-manager-plugin required.
+
+### Pull logs to your laptop for offline grep
+
+```bash
+./scripts/fetch-logs.sh                  # last 1000 lines -> /tmp/airs-demo-logs.txt
+./scripts/fetch-logs.sh 5000             # last 5000 lines
+./scripts/fetch-logs.sh --since 30m      # last 30 minutes
+./scripts/fetch-logs.sh --all            # full rotated history (5x50MB tarball -> /tmp/airs-demo-logs.tgz)
+```
+
+The script prints a set of one-liner grep recipes after each fetch for the most common questions (HTTP status distribution, slow calls, sentinel responses, per-trace history, Bedrock errors, AIRS Runtime blocks).
+
+### Log retention on the VM
+
+Docker's json-file driver is configured in `docker-compose.yml` with `max-size=50m, max-file=5` so the EC2 disk never fills during long scans. Five 50MB rotation files = ~250MB ceiling. Logs persist across container restarts (location: `/var/lib/docker/containers/<id>/`) but are removed if you `docker compose down -v` or destroy the EC2 instance. Use `./scripts/fetch-logs.sh --all` before teardown if you want a post-mortem copy.
+
+### Dialing up verbosity
+
+The Flask app reads `LOG_LEVEL` from the environment (default `INFO`). For deep debugging, set `LOG_LEVEL=DEBUG` in `.env` and restart:
+
+```bash
+echo 'LOG_LEVEL=DEBUG' >> .env
+docker compose restart                                  # local
+# or on EC2:
+aws ssm send-command --instance-ids <INSTANCE-ID> \
+    --document-name AWS-RunShellScript --region us-east-1 \
+    --parameters 'commands=["echo LOG_LEVEL=DEBUG | sudo tee -a /opt/airs-demo/.env","cd /opt/airs-demo && sudo docker compose restart"]'
+```
+
+DEBUG mode adds Bedrock client request/response shapes (still without secrets) for the converse calls. Flip back to INFO before running a long scan; DEBUG is verbose enough to make grep slower and add ~3-5MB/min during a scan.
+
+### Failure mode quick-reference
+
+The full troubleshooting matrix lives in [RED_TEAM_SETUP.md](RED_TEAM_SETUP.md). The headline failures and where to look in logs:
+
+| AIRS UI error | Where to look | Recipe |
+| --- | --- | --- |
+| `Response key 'content' not found` | This is in AIRS UI, not the app. Set Response JSON to `{"output":"{RESPONSE}"}` | n/a (config fix) |
+| `Empty output received from target` | `grep 'sentinel=True' /tmp/airs-demo-logs.txt` shows which attacks hit Bedrock guardrail null content | Already mitigated; sentinel keeps AIRS grading |
+| `Target endpoint connection failed...` | `grep -E 'HTTP/1.1" 5[0-9][0-9]' /tmp/airs-demo-logs.txt` and `grep 'bedrock error' /tmp/airs-demo-logs.txt` | Should be 0 hits on current code; if nonzero, paste the trace |
+| `ReadTimeout` on Validate | `grep elapsed_ms /tmp/airs-demo-logs.txt \| awk -F'elapsed_ms=' '{split($2,a," ");if(a[1]>30000)print}'` shows >30s requests | Cancel running scans; container has 16 concurrent slots |
 
 ## Documentation
 
