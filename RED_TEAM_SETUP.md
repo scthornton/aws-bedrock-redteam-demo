@@ -1,6 +1,6 @@
 # AIRS Red Teaming Target Setup
 
-This is the 5-minute customer path. It assumes you already deployed the demo to EC2 (see [AWS_DEPLOYMENT.md](AWS_DEPLOYMENT.md)) and have a Prisma AIRS tenant with Red Teaming enabled.
+This is the 5-minute customer path. It assumes you already deployed the demo to EC2 (`./deploy-aws-vm.sh` from the [README](README.md)) and have a Prisma AIRS tenant with Red Teaming enabled.
 
 ## Before you start
 
