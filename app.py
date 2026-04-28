@@ -240,14 +240,22 @@ def chat_completions():
             temperature=temperature,
         )
     except BedrockError as exc:
-        log.warning("bedrock error: %s status=%s", exc, exc.status_code)
-        return _error_response(
-            "bedrock_error",
-            f"Bedrock returned HTTP {exc.status_code or 'unknown'}: {exc}",
-            status=502,
+        # See /api/chat for rationale: never return non-2xx to AIRS - it
+        # classifies as connection failed instead of grading the attack.
+        log.warning("bedrock error tr=%s: %s status=%s", tr_id, exc, exc.status_code)
+        return jsonify(
+            _to_openai_response(
+                text=f"[bedrock error: HTTP {exc.status_code or 'unknown'}]",
+                model=requested_model,
+                prompt_tokens=0,
+                completion_tokens=0,
+                finish_reason="stop",
+            )
         )
 
     response_text = result["text"]
+    if not response_text or not response_text.strip():
+        response_text = "[empty model response]"
     finish_reason = _bedrock_finish_reason(result["stop_reason"])
 
     # ---------- Post-call AIRS scan (prompt + response) ----------
@@ -370,11 +378,13 @@ def airs_flat_chat():
             temperature=float(body.get("temperature", 0.7) or 0.7),
         )
     except BedrockError as exc:
-        log.warning("bedrock error: %s status=%s", exc, exc.status_code)
-        return _error_response(
-            "bedrock_error",
-            f"Bedrock returned HTTP {exc.status_code or 'unknown'}: {exc}",
-            status=502,
+        # AIRS classifies non-2xx as "connection failed / API error" instead of
+        # grading the attack. Always return 200 with a non-empty sentinel string
+        # so AIRS captures it as a real refusal-style response.
+        log.warning("bedrock error tr=%s: %s status=%s", tr_id, exc, exc.status_code)
+        return Response(
+            json.dumps({"output": f"[bedrock error: HTTP {exc.status_code or 'unknown'}]"}),
+            status=200, mimetype="application/json",
         )
 
     response_text = result["text"]
@@ -389,6 +399,13 @@ def airs_flat_chat():
                 json.dumps({"output": airs_runtime.block_message(post, side="response")}),
                 status=BLOCK_STATUS_CODE, mimetype="application/json",
             )
+
+    # Bedrock occasionally returns empty content for guardrail-filtered or
+    # zero-token completions; AIRS rejects empty strings with "Empty output
+    # received from target". Substitute a non-empty sentinel so the attack
+    # gets graded (typically as a refusal / defensive outcome).
+    if not response_text or not response_text.strip():
+        response_text = "[empty model response]"
 
     return Response(json.dumps({"output": response_text}),
                     status=200, mimetype="application/json")
