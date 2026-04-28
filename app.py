@@ -298,6 +298,112 @@ def chat_completions():
     )
 
 
+@app.post("/api/chat")
+def airs_flat_chat():
+    """
+    Dedicated AIRS Red Teaming endpoint that returns the flat response shape
+    AIRS's REST connector template `{"output":"{RESPONSE}"}` reliably extracts.
+
+    Why this exists: the OpenAI `/v1/chat/completions` route returns nested
+    JSON (`choices[0].message.content`) plus extra fields like `id`, `model`,
+    `usage`. The AIRS REST connector's template-based extraction has trouble
+    with deeply-nested response shapes, even when the template mirrors them.
+    This route bypasses all that ambiguity by returning ONLY `{"output": ...}`,
+    matching the pattern of every reliably-working AIRS public-vulnerable demo.
+
+    Accepts the same body shapes AIRS might be configured to send:
+      - {"messages":[{"role":"user","content":"..."}]}  (OpenAI-shape, our default body template)
+      - {"input": "..."}                                (DVLA-shape, plain prompt)
+
+    Returns exactly:
+      {"output": "<assistant text or block message>"}
+
+    Auth (DEMO_API_KEY) and the AIRS Runtime overlay are wired in the same
+    way as /v1/chat/completions; the only difference is the I/O shape.
+    """
+    ok, err = _check_auth()
+    if not ok:
+        return err
+
+    try:
+        body = request.get_json(force=True, silent=False) or {}
+    except Exception:
+        return _error_response("invalid_json", "Request body must be valid JSON", status=400)
+
+    user_text = ""
+    if isinstance(body.get("input"), str):
+        user_text = body["input"].strip()
+    elif isinstance(body.get("messages"), list):
+        user_msgs = [m for m in body["messages"] if m.get("role") == "user"]
+        if user_msgs:
+            content = user_msgs[-1].get("content", "")
+            if isinstance(content, list):
+                content = " ".join(p.get("text", "") for p in content if isinstance(p, dict))
+            user_text = str(content).strip()
+
+    if not user_text:
+        return _error_response(
+            "missing_input",
+            "Body must include either 'input' (string) or 'messages' (OpenAI-shape array)",
+        )
+
+    history = []
+    if isinstance(body.get("messages"), list):
+        for m in body["messages"][:-1]:
+            if m.get("role") in ("user", "assistant"):
+                history.append({"role": m["role"], "content": m.get("content", "")})
+
+    app_user = body.get("user") or "anonymous"
+    tr_id = uuid.uuid4().hex
+
+    log.info("api/chat req tr=%s user_chars=%d history_turns=%d airs=%s",
+             tr_id, len(user_text), len(history), airs_runtime.is_enabled())
+
+    if airs_runtime.is_enabled():
+        pre = airs_runtime.scan(prompt=user_text, ai_model=BEDROCK_MODEL_ID,
+                                app_user=app_user, tr_id=tr_id)
+        if pre.get("action") == "block":
+            log.info("airs PRE block tr=%s threats=%s",
+                     tr_id, airs_runtime.detected_threats(pre, side="prompt"))
+            return Response(
+                json.dumps({"output": airs_runtime.block_message(pre, side="prompt")}),
+                status=BLOCK_STATUS_CODE, mimetype="application/json",
+            )
+
+    try:
+        result = converse(
+            user_message=user_text,
+            system_prompt=build_system_prompt(),
+            history=history,
+            model_id=BEDROCK_MODEL_ID,
+            max_tokens=int(body.get("max_tokens", 1024) or 1024),
+            temperature=float(body.get("temperature", 0.7) or 0.7),
+        )
+    except BedrockError as exc:
+        log.warning("bedrock error: %s status=%s", exc, exc.status_code)
+        return _error_response(
+            "bedrock_error",
+            f"Bedrock returned HTTP {exc.status_code or 'unknown'}: {exc}",
+            status=502,
+        )
+
+    response_text = result["text"]
+
+    if airs_runtime.is_enabled():
+        post = airs_runtime.scan(prompt=user_text, response=response_text,
+                                 ai_model=BEDROCK_MODEL_ID, app_user=app_user, tr_id=tr_id)
+        if post.get("action") == "block":
+            log.info("airs POST block tr=%s threats=%s",
+                     tr_id, airs_runtime.detected_threats(post, side="response"))
+            return Response(
+                json.dumps({"output": airs_runtime.block_message(post, side="response")}),
+                status=BLOCK_STATUS_CODE, mimetype="application/json",
+            )
+
+    return Response(json.dumps({"output": response_text}), status=200,
+                    mimetype="application/json")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=port, debug=False)
