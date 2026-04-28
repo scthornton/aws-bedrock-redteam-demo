@@ -14,15 +14,22 @@ let the customer compare the two reports side by side.
 
 ## Phase 1: Runtime OFF (the vulnerable baseline)
 
-On the instance:
+Verify the running state from your laptop (no SSH; SSM Run Command over port 443):
 
 ```bash
-ssh -i ./aws-bedrock-redteam-demo.pem ec2-user@<public-ip>
-cd ~/app
-grep ENABLE_RUNTIME_SECURITY .env
-# expect: ENABLE_RUNTIME_SECURITY=false
-sudo docker compose ps   # should show healthy
+INSTANCE=$(aws ec2 describe-instances \
+    --filters "Name=tag:Project,Values=aws-bedrock-redteam-demo" \
+              "Name=instance-state-name,Values=running" \
+    --query "Reservations[0].Instances[0].InstanceId" --output text)
+aws ssm send-command --instance-ids "$INSTANCE" \
+    --document-name AWS-RunShellScript --region us-east-1 \
+    --parameters 'commands=[
+        "grep ENABLE_RUNTIME_SECURITY /opt/airs-demo/.env",
+        "sudo docker compose -f /opt/airs-demo/docker-compose.yml ps"
+    ]'
 ```
+
+Expect `ENABLE_RUNTIME_SECURITY=false` and a healthy container.
 
 In SCM:
 
@@ -43,19 +50,20 @@ handling. Specific PII leaks (synthetic SSNs, fake card numbers from
 
 ## Flip the overlay on (60 seconds)
 
-Back on the instance:
+From your laptop, no SSH:
 
 ```bash
-sudo sed -i 's/^ENABLE_RUNTIME_SECURITY=false/ENABLE_RUNTIME_SECURITY=true/' .env
-sudo docker compose down
-sudo docker compose up -d
-sleep 8
-curl -s http://127.0.0.1:8080/healthz | jq '{status, runtime_security_enabled}'
-# expect: status=ok, runtime_security_enabled=true
+aws ssm send-command --instance-ids "$INSTANCE" \
+    --document-name AWS-RunShellScript --region us-east-1 \
+    --parameters 'commands=[
+        "sudo sed -i s/ENABLE_RUNTIME_SECURITY=false/ENABLE_RUNTIME_SECURITY=true/ /opt/airs-demo/.env",
+        "cd /opt/airs-demo && sudo docker compose down && sudo docker compose up -d",
+        "sleep 8",
+        "curl -fsS http://127.0.0.1:8080/healthz | head -c 300"
+    ]'
 ```
 
-This is the only change between the two phases. The Bedrock model is the
-same, the system prompt is the same, the vulnerabilities are the same.
+Expect `runtime_security_enabled: true` in the healthz output. This is the only change between the two phases. The Bedrock model is the same, the system prompt is the same, the vulnerabilities are the same.
 
 ## Phase 2: Runtime ON
 

@@ -36,14 +36,18 @@ defeated the point and you've created a real exposure. Don't.
 
 - `.env` is gitignored. The `.env.example` template is the only env
   reference checked in.
-- The `deploy-aws-vm.sh` script generates a keypair locally
-  (`./aws-bedrock-redteam-demo.pem`) and never echoes the key material to
-  stdout. The `.pem` is gitignored via `*.pem` in `.gitignore`.
-- The AWS Bedrock API key, the AIRS scan API key, and the demo's own
-  bearer key all live in `.env` and are never logged.
-- The deploy script `scp`s `.env` to the EC2 instance over the keypair
-  it just created. There is no transit over the public internet
-  un-encrypted.
+- The deploy script does not create or use SSH keypairs. The instance is
+  provisioned with no SSH ingress at all; shell access (when needed) goes
+  through SSM Session Manager over port 443 to AWS.
+- `.env` is gitignored. The AWS Bedrock API key, the AIRS scan API key,
+  and the demo's own bearer key all live in `.env` and are never logged.
+- During deploy, `.env` contents are uploaded to AWS SSM Parameter Store
+  as a `SecureString` (KMS-encrypted at rest) and pulled by the EC2
+  instance via its IAM role. There is no plaintext transit; the only
+  channel is HTTPS to AWS APIs.
+- Code is uploaded to a private S3 bucket with default encryption and the
+  public-access-block applied. The IAM instance profile is scoped to
+  read only the specific tarball and the specific SSM parameter.
 
 If you accidentally commit a secret, rotate immediately:
 
