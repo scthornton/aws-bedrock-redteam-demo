@@ -14,9 +14,20 @@
 
 set -euo pipefail
 
-INSTANCE_ID="${INSTANCE_ID:-i-0a19f6d22c501959a}"
 REGION="${REGION:-us-east-1}"
+PROJECT_TAG="${PROJECT_TAG:-aws-bedrock-redteam-demo}"
 OUT="${OUT:-/tmp/airs-demo-logs.txt}"
+
+if [[ -z "${INSTANCE_ID:-}" ]]; then
+    INSTANCE_ID=$(aws ec2 describe-instances --region "$REGION" \
+        --filters "Name=tag:Project,Values=${PROJECT_TAG}" \
+                  "Name=instance-state-name,Values=running" \
+        --query "Reservations[].Instances[0].InstanceId" --output text 2>/dev/null || echo "")
+fi
+if [[ -z "$INSTANCE_ID" || "$INSTANCE_ID" == "None" ]]; then
+    echo "ERROR: No running instance tagged Project=${PROJECT_TAG}" >&2
+    exit 1
+fi
 
 require_aws() {
     if ! aws sts get-caller-identity --output json >/dev/null 2>&1; then
