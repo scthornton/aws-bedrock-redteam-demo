@@ -26,7 +26,7 @@ set -euo pipefail
 USER_NAME="${USER_NAME:-airs-redteam-bedrock-demo}"
 POLICY_NAME="${POLICY_NAME:-airs-redteam-bedrock-invoke}"
 REGION="${REGION:-us-east-1}"
-MODEL_ID="${MODEL_ID:-us.anthropic.claude-sonnet-4-5-20250929-v1:0}"
+MODEL_ID="${MODEL_ID:-us.anthropic.claude-3-haiku-20240307-v1:0}"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 

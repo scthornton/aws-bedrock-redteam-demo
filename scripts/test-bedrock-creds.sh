@@ -5,7 +5,7 @@
 # Usage:
 #   source .env && ./scripts/test-bedrock-creds.sh
 # or
-#   AWS_BEARER_TOKEN_BEDROCK=ABSK... BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0 ./scripts/test-bedrock-creds.sh
+#   AWS_BEARER_TOKEN_BEDROCK=ABSK... BEDROCK_MODEL_ID=us.anthropic.claude-3-haiku-20240307-v1:0 ./scripts/test-bedrock-creds.sh
 #
 # Exit codes:
 #   0  - success, model returned a response
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 : "${AWS_BEARER_TOKEN_BEDROCK:?Required: set AWS_BEARER_TOKEN_BEDROCK in .env}"
-: "${BEDROCK_MODEL_ID:=us.anthropic.claude-sonnet-4-5-20250929-v1:0}"
+: "${BEDROCK_MODEL_ID:=us.anthropic.claude-3-haiku-20240307-v1:0}"
 : "${AWS_REGION:=us-east-1}"
 
 echo "Region:   ${AWS_REGION}"

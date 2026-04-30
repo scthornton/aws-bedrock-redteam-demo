@@ -57,6 +57,7 @@ git clone <your-fork-url> aws-bedrock-redteam-demo
 cd aws-bedrock-redteam-demo
 cp .env.example .env
 $EDITOR .env                          # set AWS_BEARER_TOKEN_BEDROCK and DEMO_API_KEY
+set -a; source .env; set +a           # export env vars for the test scripts below
 ./scripts/test-bedrock-creds.sh       # pre-flight: confirms bearer-token Bedrock auth works
 ./deploy-aws-vm.sh                    # 4-6 min: S3, IAM, SG, EC2, cloud-init bootstrap
 ```
@@ -75,7 +76,7 @@ curl -X POST 'http://<EC2-IP>:8080/api/chat' \
 
 ```bash
 ./deploy-aws-vm.sh --status
-./deploy-aws-vm.sh --destroy          # removes EC2, SG, IAM role; keeps the S3 bucket
+./deploy-aws-vm.sh --destroy          # removes EC2, SG, IAM role, SSM param, and S3 bucket
 ```
 
 ## Configure AIRS Red Teaming target
@@ -144,6 +145,7 @@ The same container runs on your laptop:
 ```bash
 cp .env.example .env && $EDITOR .env
 docker compose up -d
+set -a; source .env; set +a            # export env vars for the test scripts below
 ./scripts/test-local.sh                # smoke test: /healthz, benign chat, auth check
 ./scripts/test-attack.sh               # send 8 known-bad prompts, classify LEAK / BLOCK / SAFE
 ```
@@ -210,7 +212,7 @@ Full list in `.env.example`. Highlights:
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `AWS_BEARER_TOKEN_BEDROCK` | (required) | Bedrock API key, `ABSK...` |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Inference profile or model ID |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-haiku-20240307-v1:0` | Inference profile or model ID |
 | `DEMO_API_KEY` | (required) | Bearer token AIRS sends to this app |
 | `ENABLE_RUNTIME_SECURITY` | `false` | Flip to `true` for Phase 2 of the demo |
 | `AIRS_API_KEY`, `AIRS_PROFILE`, `AIRS_API_URL` | - | Required only when Runtime overlay is on |

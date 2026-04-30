@@ -54,7 +54,7 @@ def _config(name: str, default: str | None = None, *, required: bool = False) ->
 
 
 DEMO_API_KEY = _config("DEMO_API_KEY", required=True)
-BEDROCK_MODEL_ID = _config("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+BEDROCK_MODEL_ID = _config("BEDROCK_MODEL_ID", "us.anthropic.claude-3-haiku-20240307-v1:0")
 APP_NAME = _config("APP_NAME", "aws-bedrock-redteam-demo")
 BLOCK_STATUS_CODE = int(_config("BLOCK_STATUS_CODE", "200"))
 
