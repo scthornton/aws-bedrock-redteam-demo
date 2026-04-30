@@ -80,6 +80,28 @@ curl -X POST 'http://<EC2-IP>:8080/api/chat' \
 # Expected: {"output": "pong"} in 2-5 seconds
 ```
 
+**Verify the deployment:**
+
+```bash
+# Is the app healthy?
+curl -sS http://<EC2-IP>:8080/healthz | python3 -m json.tool
+
+# Quick ping test (should return {"output":"pong"})
+curl -sS -X POST http://<EC2-IP>:8080/api/chat \
+  -H 'Authorization: Bearer <DEMO_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"reply with one word: pong"}]}'
+
+# Is AIRS scan traffic arriving? (run during a scan)
+./scripts/fetch-logs.sh --since 5m && grep 'POST /api/chat' /tmp/airs-demo-logs.txt
+
+# HTTP status distribution (should be all 200s)
+grep -oE 'HTTP/1.1" [0-9]+' /tmp/airs-demo-logs.txt | sort | uniq -c | sort -rn
+
+# Live tail (watch requests in real-time, Ctrl-C to stop)
+./scripts/tail-ec2-logs.sh
+```
+
 **Status / teardown:**
 
 ```bash
