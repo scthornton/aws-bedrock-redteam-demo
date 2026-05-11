@@ -68,7 +68,7 @@ def converse(
     """
     bearer_token = bearer_token or os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
     model_id = model_id or os.environ.get(
-        "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        "BEDROCK_MODEL_ID", "us.anthropic.claude-3-haiku-20240307-v1:0"
     )
     region = region or os.environ.get("AWS_REGION", "us-east-1")
 

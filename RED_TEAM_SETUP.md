@@ -10,10 +10,11 @@ You need:
 - `DEMO_API_KEY` from `.env` - the bearer token AIRS will use to auth to the demo
 - SCM admin or AI Security admin role on a Prisma AIRS tenant with Red Teaming enabled
 
-Copy the API key to your clipboard now (does not echo to terminal):
+Copy the API key to your clipboard now:
 
 ```bash
-grep ^DEMO_API_KEY .env | cut -d= -f2 | tr -d '\n' | pbcopy
+grep ^DEMO_API_KEY .env | cut -d= -f2 | tr -d '\n' | pbcopy   # macOS
+# grep ^DEMO_API_KEY .env | cut -d= -f2                        # any OS - prints to terminal
 ```
 
 ## Step 1 - verify the endpoint is live
@@ -70,9 +71,14 @@ Fill in (or paste from the helper):
 | --- | --- |
 | Industry | Banking / Financial Services |
 | Use Case | Internal CSR copilot. Authenticated employees query the assistant for caller account information, transaction history, and account-action eligibility during live support calls. |
-| System Prompt | output of `./scripts/print-system-prompt.sh` (`pbcopy` to clipboard) |
+| System Prompt | output of `./scripts/print-system-prompt.sh` (copy to clipboard, see below) |
 
-`./scripts/print-system-prompt.sh | pbcopy` then paste into the System Prompt field.
+```bash
+./scripts/print-system-prompt.sh | pbcopy          # macOS - copies to clipboard
+# ./scripts/print-system-prompt.sh                  # any OS - prints to terminal, copy manually
+```
+
+Paste the copied system prompt into the System Prompt field.
 
 The system prompt is what makes this demo a vulnerable target. It contains the synthetic FAKE_DATABASE, weak role boundaries, and the pre-seeded "verified user" loophole the AIRS Attack Library exploits. Without it, AIRS hits raw Claude and the scan grades as "model alignment is decent" - a much weaker demo. With it, expect 50-100+ findings on the Attack Library.
 
@@ -108,10 +114,18 @@ If the small scan grades cleanly, run the full Attack Library against the same t
 
 ## Step 9 - Phase 2 (Runtime ON / Before-After)
 
-Flip the AIRS Runtime overlay on the EC2 instance:
+Flip the AIRS Runtime overlay on the EC2 instance. First, find your instance ID (or copy it from `./deploy-aws-vm.sh --status`):
 
 ```bash
-aws ssm send-command --instance-ids <INSTANCE-ID> \
+# Get the instance ID
+INSTANCE=$(aws ec2 describe-instances \
+    --filters "Name=tag:Project,Values=aws-bedrock-redteam-demo" \
+              "Name=instance-state-name,Values=running" \
+    --query "Reservations[0].Instances[0].InstanceId" --output text)
+echo "Instance: $INSTANCE"
+
+# Flip the overlay on and restart the container
+aws ssm send-command --instance-ids "$INSTANCE" \
     --document-name AWS-RunShellScript --region us-east-1 \
     --parameters 'commands=[
         "sudo sed -i \"s/^ENABLE_RUNTIME_SECURITY=.*/ENABLE_RUNTIME_SECURITY=true/\" /opt/airs-demo/.env",

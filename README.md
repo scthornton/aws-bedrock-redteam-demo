@@ -45,18 +45,27 @@ The vulnerable surface lives in the **system prompt** (`vulnerabilities.py`): a 
 End-to-end EC2 deployment via SSM bootstrap. No SSH from your laptop required.
 
 **Prerequisites:**
-- AWS CLI v2 authenticated (`aws sso login` or static creds), permissions to launch EC2, IAM, S3, and SSM
-- Bedrock model access granted in your chosen region (Bedrock console -> Model access -> Anthropic use-case form, ~15 min)
-- Bedrock API key (long-term bearer token, starts with `ABSK`, generated from the Bedrock console)
-- Docker if you also want to run locally
+- AWS CLI v2 authenticated (`aws sso login` or static creds), permissions to launch EC2, IAM, S3, and SSM. If you use SSO profiles, export it first: `export AWS_PROFILE=<your-profile-name>`
+- Bedrock model access granted in your chosen region. In the AWS console: **Amazon Bedrock -> Model access -> Modify model access -> check Anthropic Claude models -> Submit**. Takes ~15 min to activate.
+- Bedrock API key (bearer token starting with `ABSK`). In the AWS console: **Amazon Bedrock -> API keys -> Create API key**. Copy the token immediately, it is shown only once.
+- Docker (only needed if you also want to run locally)
 
 **Deploy:**
 
 ```bash
-git clone <your-fork-url> aws-bedrock-redteam-demo
+git clone https://github.com/scthornton/aws-bedrock-redteam-demo.git
 cd aws-bedrock-redteam-demo
 cp .env.example .env
-$EDITOR .env                          # set AWS_BEARER_TOKEN_BEDROCK and DEMO_API_KEY
+
+# Edit .env - fill in these two required values:
+#   AWS_BEARER_TOKEN_BEDROCK=ABSK...   (your Bedrock API key from above)
+#   DEMO_API_KEY=<random string>       (generate one with the command below)
+nano .env
+
+# If you need a random API key for DEMO_API_KEY:
+#   python3 -c "import secrets; print(secrets.token_hex(24))"
+
+set -a; source .env; set +a           # export env vars for the test scripts below
 ./scripts/test-bedrock-creds.sh       # pre-flight: confirms bearer-token Bedrock auth works
 ./deploy-aws-vm.sh                    # 4-6 min: S3, IAM, SG, EC2, cloud-init bootstrap
 ```
@@ -71,11 +80,33 @@ curl -X POST 'http://<EC2-IP>:8080/api/chat' \
 # Expected: {"output": "pong"} in 2-5 seconds
 ```
 
+**Verify the deployment:**
+
+```bash
+# Is the app healthy?
+curl -sS http://<EC2-IP>:8080/healthz | python3 -m json.tool
+
+# Quick ping test (should return {"output":"pong"})
+curl -sS -X POST http://<EC2-IP>:8080/api/chat \
+  -H 'Authorization: Bearer <DEMO_API_KEY>' \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"reply with one word: pong"}]}'
+
+# Is AIRS scan traffic arriving? (run during a scan)
+./scripts/fetch-logs.sh --since 5m && grep 'POST /api/chat' /tmp/airs-demo-logs.txt
+
+# HTTP status distribution (should be all 200s)
+grep -oE 'HTTP/1.1" [0-9]+' /tmp/airs-demo-logs.txt | sort | uniq -c | sort -rn
+
+# Live tail (watch requests in real-time, Ctrl-C to stop)
+./scripts/tail-ec2-logs.sh
+```
+
 **Status / teardown:**
 
 ```bash
 ./deploy-aws-vm.sh --status
-./deploy-aws-vm.sh --destroy          # removes EC2, SG, IAM role; keeps the S3 bucket
+./deploy-aws-vm.sh --destroy          # removes EC2, SG, IAM role, SSM param, and S3 bucket
 ```
 
 ### Deploying multiple targets (different models)
@@ -129,7 +160,9 @@ After import, **set the Response JSON to `{"output":"{RESPONSE}"}` exactly**. Th
 Paste the system prompt into Additional Context -> System Prompt:
 
 ```bash
-./scripts/print-system-prompt.sh | pbcopy
+./scripts/print-system-prompt.sh | pbcopy          # macOS
+# ./scripts/print-system-prompt.sh | xclip -sel c  # Linux
+# ./scripts/print-system-prompt.sh                  # prints to terminal, copy manually
 ```
 
 Validate. Then run a 10-attack PROMPT_INJECTION scan first to confirm grading before launching the full Attack Library.
@@ -175,8 +208,9 @@ Re-run the **same** scan against the **same** target. Finding count drops dramat
 The same container runs on your laptop:
 
 ```bash
-cp .env.example .env && $EDITOR .env
+cp .env.example .env && nano .env      # fill in AWS_BEARER_TOKEN_BEDROCK and DEMO_API_KEY
 docker compose up -d
+set -a; source .env; set +a            # export env vars for the test scripts below
 ./scripts/test-local.sh                # smoke test: /healthz, benign chat, auth check
 ./scripts/test-attack.sh               # send 8 known-bad prompts, classify LEAK / BLOCK / SAFE
 ```
@@ -243,7 +277,7 @@ Full list in `.env.example`. Highlights:
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `AWS_BEARER_TOKEN_BEDROCK` | (required) | Bedrock API key, `ABSK...` |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Inference profile or model ID (see `.env.example` for common IDs) |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-haiku-20240307-v1:0` | Inference profile or model ID (see `.env.example` for common IDs) |
 | `DEMO_API_KEY` | (required) | Bearer token AIRS sends to this app |
 | `ENABLE_RUNTIME_SECURITY` | `false` | Flip to `true` for Phase 2 of the demo |
 | `AIRS_API_KEY`, `AIRS_PROFILE`, `AIRS_API_URL` | - | Required only when Runtime overlay is on |
