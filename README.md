@@ -109,6 +109,39 @@ grep -oE 'HTTP/1.1" [0-9]+' /tmp/airs-demo-logs.txt | sort | uniq -c | sort -rn
 ./deploy-aws-vm.sh --destroy          # removes EC2, SG, IAM role, SSM param, and S3 bucket
 ```
 
+### Deploying multiple targets (different models)
+
+You can run multiple instances side-by-side to compare red teaming results across
+models. Each instance needs its own `PROJECT_TAG`, `SSM_PARAM_NAME`, and `.env` file
+with a different `BEDROCK_MODEL_ID`. All other code is shared.
+
+```bash
+# Create a second .env for Opus 4.5
+cp .env .env.opus
+# Edit .env.opus: change BEDROCK_MODEL_ID and APP_NAME
+#   BEDROCK_MODEL_ID=us.anthropic.claude-opus-4-5-20251101-v1:0
+#   APP_NAME=aws-bedrock-redteam-opus
+
+# Deploy with a separate project tag and SSM param
+PROJECT_TAG="aws-bedrock-redteam-opus" \
+SSM_PARAM_NAME="/demo/airs-bedrock-redteam-opus/env" \
+ENV_FILE="$(pwd)/.env.opus" \
+  ./deploy-aws-vm.sh deploy
+
+# Status / teardown for the second instance
+PROJECT_TAG="aws-bedrock-redteam-opus" \
+SSM_PARAM_NAME="/demo/airs-bedrock-redteam-opus/env" \
+  ./deploy-aws-vm.sh --status
+
+PROJECT_TAG="aws-bedrock-redteam-opus" \
+SSM_PARAM_NAME="/demo/airs-bedrock-redteam-opus/env" \
+  ./deploy-aws-vm.sh --destroy
+```
+
+Each instance gets its own EC2 instance, security group, IAM role, and S3 bucket,
+all namespaced by `PROJECT_TAG`. Create a separate AIRS Red Teaming target for each
+and run the same scan against both to compare model resilience.
+
 ## Configure AIRS Red Teaming target
 
 Full field-by-field walkthrough lives in **[RED_TEAM_SETUP.md](RED_TEAM_SETUP.md)**. The 30-second version:
@@ -244,7 +277,7 @@ Full list in `.env.example`. Highlights:
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `AWS_BEARER_TOKEN_BEDROCK` | (required) | Bedrock API key, `ABSK...` |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-haiku-20240307-v1:0` | Inference profile or model ID |
+| `BEDROCK_MODEL_ID` | `us.anthropic.claude-3-haiku-20240307-v1:0` | Inference profile or model ID (see `.env.example` for common IDs) |
 | `DEMO_API_KEY` | (required) | Bearer token AIRS sends to this app |
 | `ENABLE_RUNTIME_SECURITY` | `false` | Flip to `true` for Phase 2 of the demo |
 | `AIRS_API_KEY`, `AIRS_PROFILE`, `AIRS_API_URL` | - | Required only when Runtime overlay is on |
